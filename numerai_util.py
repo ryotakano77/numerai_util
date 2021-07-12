@@ -4,6 +4,8 @@ import pickle
 import pandas as pd
 import numpy as np
 from scipy.stats import spearmanr
+from PIL import Image
+import matplotlib.pyplot as plt
 
 # Submissions are scored by spearman correlation
 def correlation(predictions, targets):
@@ -165,3 +167,66 @@ def load_or_predict(pred_from: str, model_name: str, base_path: str="/Users/ryo/
         print("predicted!")
         df_features.to_csv(file_path, header=True)
         return df_features
+
+def calc_stats(df: pd.DataFrame):
+    stats = {}
+    target = df["target"]
+    prediction = df["prediction"]
+
+    stats["peason_corr"] = np.corrcoef(target, prediction)[0, 1]
+    stats["corr"] = correlation(target, prediction)
+    corr_by_era = df.groupby("era")[["target", "prediction"]].corr().iloc[0::2, -1].reset_index()["prediction"]
+    stats["max_dd"] = max_drawdown(corr_by_era)
+    stats["corr_mean"] = corr_by_era.mean()
+    stats["corr_std"] = corr_by_era.std()
+    stats["sharp"] = stats["corr_mean"] / stats["corr_std"]
+    fes = feature_exposures(df)
+    stats["feature_exposure"] = feature_exposure(fes)
+    stats["max_feature_exposure"] = max_feature_exposure(fes)
+    return pd.Series(stats)
+
+def calc_corr_by_era(df: pd.DataFrame):
+    corr_by_era = df.groupby("era")[["target", "prediction"]].corr().iloc[0::2, -1].reset_index()[["era", "prediction"]]
+    era_name = ["era" + str(e) for e in corr_by_era["era"]]
+    corr_s = pd.Series(corr_by_era["prediction"])
+    corr_s.index = era_name
+    return corr_s
+
+def calc_all_stats(df: pd.DataFrame):
+    stats_val_all = calc_stats(df)
+    stats_val1 = calc_stats(df.query("era < 150"))
+    stats_val2 = calc_stats(df.query("era > 150"))
+    corr_by_era = calc_corr_by_era(df)
+    stats_val_all.rename(index=lambda x: x+"_val_all", inplace=True)
+    stats_val1.rename(index=lambda x: x+"_val_1", inplace=True)
+    stats_val2.rename(index=lambda x: x+"_val_2", inplace=True)
+    stats = pd.concat([stats_val_all, stats_val1, stats_val2, corr_by_era])
+    df_stats = pd.DataFrame([stats])
+    return df_stats
+
+def load_data_and_calc_stats(model_name: str):
+    prediction_dir = "/Users/ryo/Documents/numerai/numerai_datasets/predictions/validation_all"
+    prediction_file = model_name + ".csv"
+    prediction_path = os.path.join(prediction_dir, prediction_file)
+    df_pred = pd.read_csv(prediction_path, index_col=0)
+    df_pred["era"] = df_pred["era"].map(get_era)
+    df_stats = calc_all_stats(df_pred)
+    return df_stats.rename(index={0: model_name})
+
+def get_im_from_df(df: pd.DataFrame, feature_idx: int, era_idx: int):
+    counts_by_feature = 5
+    col_start_idx = counts_by_feature * feature_idx
+    col_end_idx   = counts_by_feature * (feature_idx + 1)
+
+    counts = df.iloc[era_idx, col_start_idx : col_end_idx]
+
+    fig, ax = plt.subplots()
+    ax.bar([0, 0.25, 0.5, 0.75, 1], counts, width=0.1)
+    ax.set_title(counts.index[0][0])
+    fig.canvas.draw()
+    im = np.array(fig.canvas.renderer.buffer_rgba())
+
+    return Image.fromarray(im)
+
+def gif_from_im_list(im_list, file_path, duration=5):
+    return im_list[0].save(file_path, save_all=True, append_images=im_list[1:], optimize=False, duration=duration)
